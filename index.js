@@ -42,6 +42,7 @@ app.use(cookieParser());
 //Apis de Autorizacion
 app.post("/api/register", middlewares.soloAdmin, methods.register);
 app.post("/api/login", methods.login);
+app.post("/api/verify2fa", methods.verify2FA);
 app.get('/api/auth-cookie', async (req, res) => {
   const isCookieValid = await middlewares.revisarCookie(req);
   res.json({ isAuthenticated: isCookieValid });

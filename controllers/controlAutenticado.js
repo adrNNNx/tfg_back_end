@@ -185,7 +185,6 @@ async function register(req, res) {
       status: "ok",
       message:
         "Usuario: " + nuevoUsuario.nombre + " registrado en la base de datos",
-      redirect: "/login",
       secret2FA: {
         otpauth_url: secret2FA.otpauth_url,
         base32: secret2FA.base32,
@@ -198,9 +197,46 @@ async function register(req, res) {
   }
 }
 
+async function verify2FA(req, res) {
+  const { userId, token } = req.body;
+
+  try {
+    // Busca el usuario en la base de datos usando el userId
+    const user = await UserModel.findOne({ userID: userId }); // Cambia 'uuid' por el nombre de campo correcto si es necesario
+    if (!user) {
+      return res
+        .status(404)
+        .json({ status: "Error", message: "Usuario no encontrado" });
+    }
+
+    // Verifica el código 2FA proporcionado con el secreto almacenado
+    const verified = speakeasy.totp.verify({
+      secret: user.secret2FA, // Este es el secreto almacenado del usuario
+      encoding: "base32",
+      token: token, // El token ingresado por el usuario
+    });
+
+    if (verified) {
+      return res
+        .status(200)
+        .json({ status: "ok", message: "Código 2FA verificado correctamente", redirect: "/login" });
+    } else {
+      return res
+        .status(400)
+        .json({ status: "Error", message: "Código 2FA incorrecto" });
+    }
+  } catch (error) {
+    console.error("Error al verificar el 2FA:", error);
+    return res
+      .status(500)
+      .json({ status: "Error", message: "Error interno del servidor" });
+  }
+}
+
 const methods = {
   register,
   login,
+  verify2FA,
 };
 
 export default methods;
