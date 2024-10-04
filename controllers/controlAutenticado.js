@@ -6,6 +6,10 @@ import argon2 from "argon2";
 import UserModel from "../bdesquemas/userModel.js";
 import speakeasy from "speakeasy";
 import { v4 as uuidv4 } from "uuid";
+import pkg from "elliptic";
+const { ec: EC } = pkg;
+
+const ec = new EC("secp256k1"); // Ethereum utiliza la curva secp256k1
 
 //Funcion de login con validacion de token
 async function login(req, res) {
@@ -125,6 +129,44 @@ async function cifrarClavePrivada(clavePrivada, contraseña) {
   };
 }
 
+async function generarClavePublica(clavePrivadaHex) {
+  // Convertir la clave privada derivada a un buffer
+  const clavePrivadaBuffer = Buffer.from(clavePrivadaHex, "hex");
+
+  // Generar la clave pública usando la curva secp256k1
+  const clave = ec.keyFromPrivate(clavePrivadaBuffer);
+  const clavePublica = clave.getPublic("hex"); // Obtener la clave pública en formato hexadecimal
+
+  console.log("Clave pública: ", clavePublica);
+  return clavePublica;
+}
+
+// Función para cifrar el secreto 2FA
+async function cifrarSecreto2FA(secreto, claveSimetrica) {
+  const iv = crypto.randomBytes(16); // Generar un IV aleatorio de 16 bytes
+  const cipher = crypto.createCipheriv("aes-256-cbc", Buffer.from(claveSimetrica), iv);
+  
+  let secretoCifrado = cipher.update(secreto, 'utf8', 'hex');
+  secretoCifrado += cipher.final('hex');
+
+  return {
+    secretoCifrado,
+    iv: iv.toString('hex'), // Guardar el IV en formato hexadecimal
+  };
+}
+
+function firmarMensaje(clavePrivada, mensaje) {
+  const mensajeHash = crypto.createHash("sha256").update(mensaje).digest();
+  const firma = ec.sign(mensajeHash, clavePrivada, "hex");
+  return firma;
+}
+
+function verificarFirma(clavePublica, mensaje, firma) {
+  const mensajeHash = crypto.createHash("sha256").update(mensaje).digest();
+  const clave = ec.keyFromPublic(clavePublica, "hex");
+  return clave.verify(mensajeHash, firma);
+}
+
 async function register(req, res) {
   console.log(req.body);
   const user = req.body.nom_usu;
@@ -152,9 +194,11 @@ async function register(req, res) {
     const salt = await bcryptjs.genSalt(saltRounds);
     const hashPassword = await bcryptjs.hash(password, salt);
 
-    // Paso 1: Generar la clave privada derivada a partir del secreto
+    // Paso 1: Generar la clave privada derivada a partir del secreto, junto con la calve pública
     const { clavePrivadaDerivada, saltClavePrivada } =
       await generarClavePrivadaDesdeSecreto(secreto);
+
+    const clavePublica = await generarClavePublica(clavePrivadaDerivada);
 
     // Paso 2: Cifrar la clave privada usando la contraseña del usuario
     const {
@@ -163,6 +207,18 @@ async function register(req, res) {
       iv,
     } = await cifrarClavePrivada(clavePrivadaDerivada, password);
 
+    //------------Algoritmo de prueba de claves------------
+    const mensaje = "Este es un mensaje de prueba";
+    const firma = firmarMensaje(clavePrivadaDerivada, mensaje);
+
+    const esValida = verificarFirma(clavePublica, mensaje, firma);
+    if (esValida) {
+      console.log("La firma es válida, las claves funcionan correctamente");
+    } else {
+      console.log("La firma no es válida, revisa las claves generadas");
+    }
+    //------------Algoritmo de prueba de claves------------
+    
     // Generar un secreto para el 2FA usando Speakeasy
     const secret2FA = speakeasy.generateSecret({ length: 20 });
 
@@ -171,7 +227,8 @@ async function register(req, res) {
       userID: uuidv4(), // Generar un ID único
       nombre: user,
       contraseña: hashPassword,
-      clavePrivadaCifrada, // Guardar la clave privada cifrada
+      clavePrivadaCifrada, // Guardar la clave privada cifrada,
+      clavePublica: clavePublica,
       saltClavePrivada: saltClavePrivada.toString("hex"), // Salt usado para derivar la clave privada
       saltCifrado: saltCifrado.toString("hex"), // Salt usada para derivar la clave simétrica
       iv: iv.toString("hex"), // IV usado para el cifrado AES
@@ -202,7 +259,7 @@ async function verify2FA(req, res) {
 
   try {
     // Busca el usuario en la base de datos usando el userId
-    const user = await UserModel.findOne({ userID: userId }); // Cambia 'uuid' por el nombre de campo correcto si es necesario
+    const user = await UserModel.findOne({ userID: userId });
     if (!user) {
       return res
         .status(404)
@@ -217,9 +274,11 @@ async function verify2FA(req, res) {
     });
 
     if (verified) {
-      return res
-        .status(200)
-        .json({ status: "ok", message: "Código 2FA verificado correctamente", redirect: "/login" });
+      return res.status(200).json({
+        status: "ok",
+        message: "Código 2FA verificado correctamente",
+        redirect: "/login",
+      });
     } else {
       return res
         .status(400)

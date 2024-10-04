@@ -20,6 +20,10 @@ const userSchema = new mongoose.Schema(
       type: String,
       required: true,
     },
+    clavePublica: {
+      type: String,
+      required: true,
+    },
     saltClavePrivada: {
       type: String,
       required: true,

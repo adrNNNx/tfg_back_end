@@ -2,11 +2,15 @@ import express from "express";
 import mongoose from "mongoose";
 import dotenv from "dotenv";
 import morgan from "morgan";
+import multer from 'multer';
 import cookieParser from "cookie-parser";
 import middlewares from "./middleware/authorization.js";
 import methods from "./controllers/controlAutenticado.js";
 import cors from "cors";
 import UserModel from './bdesquemas/userModel.js';
+import recepcionDatos from "./controllers/recepcionDatos.js";
+
+const upload = multer(); // Almacena archivos en memoria
 
 const app = express();
 dotenv.config();
@@ -47,6 +51,12 @@ app.get('/api/auth-cookie', async (req, res) => {
   const isCookieValid = await middlewares.revisarCookie(req);
   res.json({ isAuthenticated: isCookieValid });
 });
+
+//Api de los documentos
+app.post('/api/documentos-credenciales', upload.single('file'), recepcionDatos.credenciales_documentos_hash);
+
+
+
 app.get("/usuarios", async (req, res) => {
   try {
     const userData = await UserModel.find();
