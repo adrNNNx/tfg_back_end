@@ -141,30 +141,46 @@ async function generarClavePublica(clavePrivadaHex) {
   return clavePublica;
 }
 
-// Función para cifrar el secreto 2FA
-async function cifrarSecreto2FA(secreto, claveSimetrica) {
-  const iv = crypto.randomBytes(16); // Generar un IV aleatorio de 16 bytes
-  const cipher = crypto.createCipheriv("aes-256-cbc", Buffer.from(claveSimetrica), iv);
-  
-  let secretoCifrado = cipher.update(secreto, 'utf8', 'hex');
-  secretoCifrado += cipher.final('hex');
+// Función para firmar un mensaje con la clave privada
+async function firmarMensaje(clavePrivadaHex, mensaje) {
+  // Convertir clave privada a formato adecuado
+  const clavePrivada = ec.keyFromPrivate(clavePrivadaHex, "hex");
 
-  return {
-    secretoCifrado,
-    iv: iv.toString('hex'), // Guardar el IV en formato hexadecimal
+  // Crear hash del mensaje para firmarlo
+  const hashMensaje = crypto.createHash("sha256").update(mensaje).digest();
+
+  // Firmar el hash del mensaje
+  const firma = clavePrivada.sign(hashMensaje);
+
+  // Convertir la firma a un formato que pueda ser compartido (r y s en hexadecimal)
+  const firmaHex = {
+    r: firma.r.toString("hex"),
+    s: firma.s.toString("hex"),
+    recoveryParam: firma.recoveryParam, // Parámetro para recuperación
   };
+
+  console.log("Firma:", firmaHex);
+  return firmaHex;
 }
 
-function firmarMensaje(clavePrivada, mensaje) {
-  const mensajeHash = crypto.createHash("sha256").update(mensaje).digest();
-  const firma = ec.sign(mensajeHash, clavePrivada, "hex");
-  return firma;
-}
+// Función para verificar la firma con la clave pública
+async function verificarFirma(clavePublicaHex, mensaje, firmaHex) {
+  // Crear una clave pública a partir del formato hexadecimal
+  const clavePublica = ec.keyFromPublic(clavePublicaHex, "hex");
 
-function verificarFirma(clavePublica, mensaje, firma) {
-  const mensajeHash = crypto.createHash("sha256").update(mensaje).digest();
-  const clave = ec.keyFromPublic(clavePublica, "hex");
-  return clave.verify(mensajeHash, firma);
+  // Crear hash del mensaje para verificarlo
+  const hashMensaje = crypto.createHash("sha256").update(mensaje).digest();
+
+  // Verificar la firma (usando un objeto Signature de elliptic)
+  const firma = {
+    r: firmaHex.r,
+    s: firmaHex.s,
+  };
+
+  const esValido = clavePublica.verify(hashMensaje, firma);
+
+  console.log("¿Firma válida?", esValido);
+  return esValido;
 }
 
 async function register(req, res) {
@@ -209,16 +225,16 @@ async function register(req, res) {
 
     //------------Algoritmo de prueba de claves------------
     const mensaje = "Este es un mensaje de prueba";
-    const firma = firmarMensaje(clavePrivadaDerivada, mensaje);
+    const firma = await firmarMensaje(clavePrivadaDerivada, mensaje);
 
-    const esValida = verificarFirma(clavePublica, mensaje, firma);
+    const esValida = await verificarFirma(clavePublica, mensaje, firma);
     if (esValida) {
       console.log("La firma es válida, las claves funcionan correctamente");
     } else {
       console.log("La firma no es válida, revisa las claves generadas");
     }
     //------------Algoritmo de prueba de claves------------
-    
+
     // Generar un secreto para el 2FA usando Speakeasy
     const secret2FA = speakeasy.generateSecret({ length: 20 });
 
