@@ -65,23 +65,54 @@ async function firmarMensaje(clavePrivadaHex, hashDocumento) {
   return firmaHex;
 }
 
-// Función para verificar la firma con la clave pública
-async function verificarFirma(clavePublicaHex, hashDocumento, firmaHex) {
-  // Crear una clave pública a partir del formato hexadecimal
-  const clavePublica = ec.keyFromPublic(clavePublicaHex, "hex");
+// Función para verificar la firma con el hash del archivo
+async function verificarFirmaDocumento(req, res) {
+  try {
+    // Validación del archivo cargado
+    if (!req.file) {
+      return res.status(400).send("No se ha subido ningún archivo.");
+    }
 
-  // Verificar la firma (usando un objeto Signature de elliptic)
-  const firma = {
-    r: firmaHex.r,
-    s: firmaHex.s,
-  };
+    // Obtenemos el hash del documento para comparar con el de la base de datos
+    const hashDocumento = await hashearArchivo(req.file.buffer); // Usa req.file.buffer para acceder al contenido del archivo
 
-  const esValido = clavePublica.verify(hashDocumento, firma);
+    // Buscamos en la base de datos el documento que tenga el mismo hash
+    const documentoExistente = await DocumentModel.findOne({ hashDocumento });
 
-  console.log("¿Firma válida?", esValido);
-  return esValido;
+    // Si no existe ningún documento con ese hash, indicamos que no se ha firmado
+    if (!documentoExistente) {
+      return res.status(404).json({
+        status: "Error",
+        message: "El documento ingresado no ha sido firmado aún.",
+      });
+    }
+
+    const userID = documentoExistente.userID;
+    const user = await UserModel.findOne({ userID });
+
+    // Si el documento existe, devolvemos la información del documento firmado
+    return res.status(200).json({
+      status: "OK",
+      message: "Este documento ya ha sido firmado.",
+      datosDocumento: {
+        userID: documentoExistente.userID,
+        firmante: user.nombre,
+        hashDocumento: hashDocumento,
+        clavePublica: user.clavePublica,
+        documentID: documentoExistente.documentID,
+        nombreDocumento: documentoExistente.nombreDocumento,
+        fechaFirma: documentoExistente.fechaFirma,
+        blockchainTxHash: documentoExistente.blockchainTxHash,
+      },
+    });
+  } catch (error) {
+    console.error("Error al verificar el documento:", error);
+    res.status(500).json({
+      status: "Error",
+      message: "Error interno del servidor",
+    });
+  }
 }
-
 async function credenciales_documentos_hash(req, res) {
   // Endpoint para recibir el archivo y los datos del formulario
   try {
@@ -190,7 +221,6 @@ async function credenciales_documentos_hash(req, res) {
       firmaLegible,
       nombreUsuario,
     });
-
   } catch (error) {
     console.error("Error al procesar el archivo:", error);
     res.status(500).send("Error interno del servidor");
@@ -199,6 +229,7 @@ async function credenciales_documentos_hash(req, res) {
 
 const recepcionDatos = {
   credenciales_documentos_hash,
+  verificarFirmaDocumento,
 };
 
 export default recepcionDatos;
