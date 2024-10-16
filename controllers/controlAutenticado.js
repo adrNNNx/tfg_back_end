@@ -5,6 +5,8 @@ import crypto from "crypto";
 import argon2 from "argon2";
 import UserModel from "../bdesquemas/userModel.js";
 import speakeasy from "speakeasy";
+import Web3 from "web3";
+const web3 = new Web3("http://127.0.0.1:7545"); // O la URL de Ethereum
 import { v4 as uuidv4 } from "uuid";
 import pkg from "elliptic";
 const { ec: EC } = pkg;
@@ -80,23 +82,58 @@ async function login(req, res) {
   }
 }
 
+function obtenerDireccionDesdeClavePublica(clavePublica) {
+  // Calcular la dirección Ethereum a partir de la clave pública
+  const direccion = web3.utils.keccak256(clavePublica.slice(2)).slice(-40); // Hash de la clave pública
+  return `0x${direccion}`; // Retornar la dirección en formato 0x
+}
+
 // Función para generar la clave privada a partir del secreto usando Argon2id
 async function generarClavePrivadaDesdeSecreto(secreto) {
-  const saltClavePrivada = crypto.randomBytes(16); // Generar un salt para derivar la clave privada
+  let clavePrivadaHex;
+  let saltClavePrivada;
+  let isValid = false;
 
-  // Derivar una clave privada de 32 bytes usando Argon2id
-  const clavePrivadaDerivada = await argon2.hash(secreto, {
-    type: argon2.argon2id,
-    salt: saltClavePrivada,
-    hashLength: 32, // Longitud de la clave privada en bytes
-    timeCost: 3, // Número de iteraciones
-    memoryCost: 2 ** 16, // Memoria utilizada en KB -> 64 MB
-    parallelism: 1, // Número de hilos
-    raw: true, // Para obtener la clave derivada en formato de buffer
-  });
-  console.log("Clave secreta: ", clavePrivadaDerivada.toString("hex"));
+  // Este ciclo while lo que hace es en el caso de que se obtenga un numero que no sea valido para el algoritmo de firmado de ethereum.
+  while (!isValid) {
+    // Generar un salt aleatorio
+    saltClavePrivada = crypto.randomBytes(16);
+
+    // Derivar una clave privada de 32 bytes usando Argon2id
+    const clavePrivadaDerivada = await argon2.hash(secreto, {
+      type: argon2.argon2id,
+      salt: saltClavePrivada,
+      hashLength: 32, // Longitud de la clave privada en bytes
+      timeCost: 3, // Número de iteraciones
+      memoryCost: 2 ** 16, // Memoria utilizada en KB -> 64 MB
+      parallelism: 1, // Número de hilos
+      raw: true, // Para obtener la clave derivada en formato de buffer
+    });
+
+    // Convertir a hexadecimal
+    clavePrivadaHex = clavePrivadaDerivada.toString("hex");
+
+    // Validar la clave privada
+    try {
+      const clavePrivadaBN = ec.keyFromPrivate(clavePrivadaHex, "hex");
+      isValid =
+        clavePrivadaBN.getPrivate().lt(ec.curve.n) &&
+        clavePrivadaBN.getPrivate().gt(0);
+
+      if (!isValid) {
+        console.log("Clave privada no válida, generando una nueva...");
+      }
+    } catch (error) {
+      console.log("Error al validar la clave privada:", error);
+      isValid = false;
+    }
+  }
+
+  // La clave privada es válida
+  console.log("Clave privada válida");
+
   return {
-    clavePrivadaDerivada: clavePrivadaDerivada.toString("hex"),
+    clavePrivadaDerivada: clavePrivadaHex,
     saltClavePrivada,
   };
 }
@@ -137,50 +174,11 @@ async function generarClavePublica(clavePrivadaHex) {
   const clave = ec.keyFromPrivate(clavePrivadaBuffer);
   const clavePublica = clave.getPublic("hex"); // Obtener la clave pública en formato hexadecimal
 
-  console.log("Clave pública: ", clavePublica);
+  // Obtener la dirección de ethereum desde la clave pública
+  const direccion = obtenerDireccionDesdeClavePublica(clavePublica);
+  console.log("Dirección Ethereum: ", direccion);
+
   return clavePublica;
-}
-
-// Función para firmar un mensaje con la clave privada
-async function firmarMensaje(clavePrivadaHex, mensaje) {
-  // Convertir clave privada a formato adecuado
-  const clavePrivada = ec.keyFromPrivate(clavePrivadaHex, "hex");
-
-  // Crear hash del mensaje para firmarlo
-  const hashMensaje = crypto.createHash("sha256").update(mensaje).digest();
-
-  // Firmar el hash del mensaje
-  const firma = clavePrivada.sign(hashMensaje);
-
-  // Convertir la firma a un formato que pueda ser compartido (r y s en hexadecimal)
-  const firmaHex = {
-    r: firma.r.toString("hex"),
-    s: firma.s.toString("hex"),
-    recoveryParam: firma.recoveryParam, // Parámetro para recuperación
-  };
-
-  console.log("Firma:", firmaHex);
-  return firmaHex;
-}
-
-// Función para verificar la firma con la clave pública
-async function verificarFirma(clavePublicaHex, mensaje, firmaHex) {
-  // Crear una clave pública a partir del formato hexadecimal
-  const clavePublica = ec.keyFromPublic(clavePublicaHex, "hex");
-
-  // Crear hash del mensaje para verificarlo
-  const hashMensaje = crypto.createHash("sha256").update(mensaje).digest();
-
-  // Verificar la firma (usando un objeto Signature de elliptic)
-  const firma = {
-    r: firmaHex.r,
-    s: firmaHex.s,
-  };
-
-  const esValido = clavePublica.verify(hashMensaje, firma);
-
-  console.log("¿Firma válida?", esValido);
-  return esValido;
 }
 
 async function register(req, res) {
@@ -189,7 +187,6 @@ async function register(req, res) {
   const password = req.body.contr_usu;
   const secreto = req.body.secreto;
 
-  // Validación por si se envía vacío
   if (!user || !password || !secreto) {
     return res
       .status(400)
@@ -197,7 +194,6 @@ async function register(req, res) {
   }
 
   try {
-    // Verificación si el usuario ya existe
     const usuarioArevisar = await UserModel.findOne({ nombre: user });
     if (usuarioArevisar) {
       return res
@@ -205,106 +201,88 @@ async function register(req, res) {
         .json({ status: "Error", message: "Este usuario ya existe" });
     }
 
-    // Generar el salt y hash de la contraseña
+    // Generar el hash de la contraseña
     const saltRounds = 10;
     const salt = await bcryptjs.genSalt(saltRounds);
     const hashPassword = await bcryptjs.hash(password, salt);
 
-    // Paso 1: Generar la clave privada derivada a partir del secreto, junto con la calve pública
+    // Generar clave privada y pública
     const { clavePrivadaDerivada, saltClavePrivada } =
       await generarClavePrivadaDesdeSecreto(secreto);
-
     const clavePublica = await generarClavePublica(clavePrivadaDerivada);
 
-    // Paso 2: Cifrar la clave privada usando la contraseña del usuario
+    // Cifrar clave privada
     const {
       clavePrivadaCifrada,
       salt: saltCifrado,
       iv,
     } = await cifrarClavePrivada(clavePrivadaDerivada, password);
 
-    //------------Algoritmo de prueba de claves------------
-    const mensaje = "Este es un mensaje de prueba";
-    const firma = await firmarMensaje(clavePrivadaDerivada, mensaje);
-
-    const esValida = await verificarFirma(clavePublica, mensaje, firma);
-    if (esValida) {
-      console.log("La firma es válida, las claves funcionan correctamente");
-    } else {
-      console.log("La firma no es válida, revisa las claves generadas");
-    }
-    //------------Algoritmo de prueba de claves------------
-
     // Generar un secreto para el 2FA usando Speakeasy
     const secret2FA = speakeasy.generateSecret({ length: 20 });
 
-    // Crear el nuevo usuario con Mongoose
-    const nuevoUsuario = new UserModel({
-      userID: uuidv4(), // Generar un ID único
-      nombre: user,
-      contraseña: hashPassword,
-      clavePrivadaCifrada, // Guardar la clave privada cifrada,
-      clavePublica: clavePublica,
-      saltClavePrivada: saltClavePrivada.toString("hex"), // Salt usado para derivar la clave privada
-      saltCifrado: saltCifrado.toString("hex"), // Salt usada para derivar la clave simétrica
-      iv: iv.toString("hex"), // IV usado para el cifrado AES
-      secret2FA: secret2FA.base32, // Almacenar el secreto del 2FA (en base32 para su uso posterior)
-    });
-
-    // Guardar el nuevo usuario en la base de datos
-    await nuevoUsuario.save();
-
+    // Enviar el secreto 2FA al frontend, no se guarda el usuario aún
     return res.status(201).json({
       status: "ok",
-      message:
-        "Usuario: " + nuevoUsuario.nombre + " registrado en la base de datos",
       secret2FA: {
         otpauth_url: secret2FA.otpauth_url,
         base32: secret2FA.base32,
-      }, // Enviar la URL para el QR (otpauth URL)
-      userID: nuevoUsuario.userID,
+      },
+      userTempData: {
+        user,
+        hashPassword,
+        clavePrivadaCifrada,
+        clavePublica,
+        saltClavePrivada: saltClavePrivada.toString("hex"),
+        saltCifrado: saltCifrado.toString("hex"),
+        iv: iv.toString("hex"),
+        secret2FA: secret2FA.base32,
+      },
     });
   } catch (error) {
-    console.error("Error al registrar el usuario:", error);
+    console.error("Error al generar 2FA:", error);
     return res.status(500).json({ error: "Error interno del servidor" });
   }
 }
 
 async function verify2FA(req, res) {
-  const { userId, token } = req.body;
+  const { userTempData, token } = req.body;
 
-  try {
-    // Busca el usuario en la base de datos usando el userId
-    const user = await UserModel.findOne({ userID: userId });
-    if (!user) {
-      return res
-        .status(404)
-        .json({ status: "Error", message: "Usuario no encontrado" });
-    }
+  const verified = speakeasy.totp.verify({
+    secret: userTempData.secret2FA,
+    encoding: "base32",
+    token,
+  });
 
-    // Verifica el código 2FA proporcionado con el secreto almacenado
-    const verified = speakeasy.totp.verify({
-      secret: user.secret2FA, // Este es el secreto almacenado del usuario
-      encoding: "base32",
-      token: token, // El token ingresado por el usuario
-    });
+  if (verified) {
+    try {
+      // Guardar al usuario en la base de datos una vez se verifico el token
+      const nuevoUsuario = new UserModel({
+        userID: uuidv4(),
+        nombre: userTempData.user,
+        contraseña: userTempData.hashPassword,
+        clavePrivadaCifrada: userTempData.clavePrivadaCifrada,
+        clavePublica: userTempData.clavePublica,
+        saltClavePrivada: userTempData.saltClavePrivada,
+        saltCifrado: userTempData.saltCifrado,
+        iv: userTempData.iv,
+        secret2FA: userTempData.secret2FA,
+      });
 
-    if (verified) {
+      await nuevoUsuario.save();
       return res.status(200).json({
         status: "ok",
         message: "Código 2FA verificado correctamente",
         redirect: "/login",
       });
-    } else {
-      return res
-        .status(400)
-        .json({ status: "Error", message: "Código 2FA incorrecto" });
+    } catch (error) {
+      console.error("Error al registrar el usuario:", error);
+      return res.status(500).json({ error: "Error interno del servidor" });
     }
-  } catch (error) {
-    console.error("Error al verificar el 2FA:", error);
+  } else {
     return res
-      .status(500)
-      .json({ status: "Error", message: "Error interno del servidor" });
+      .status(400)
+      .json({ status: "error", message: "Token de 2FA inválido" });
   }
 }
 
