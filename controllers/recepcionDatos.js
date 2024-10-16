@@ -1,10 +1,13 @@
 import crypto from "crypto";
 import bcryptjs from "bcryptjs";
 import speakeasy from "speakeasy";
+import dotenv from "dotenv";
 import argon2 from "argon2";
 import UserModel from "../bdesquemas/userModel.js";
 import DocumentModel from "../bdesquemas/signedDocuments.js";
 import { v4 as uuidv4 } from "uuid";
+
+dotenv.config();
 
 //Curva eliptica de ethereum
 import pkg from "elliptic";
@@ -15,10 +18,9 @@ const ec = new EC("secp256k1"); // Ethereum utiliza la curva secp256k1
 import Web3 from "web3";
 import contractABI from "../../contrato_inteligente/abis/ContratoFirma.json" assert { type: "json" }; // ABI del contrato compilado
 
-const contractAddress = "0x3005F3719B6D385c4D6892D4503c1EC85194E3Fe"; // Dirección del contrato en la blockchain
-const accountAddress = "0xC3b4181fb3823d09d672478d7E2184d9d7A292a0"; //Direccion de la cuenta de ganache en la blockchain
-const clavePrivadaGanache =
-  "0x5d15cb6a869a27d6f4a1ebb3aa7b6efca050f3331519805410d369baea211ecd";
+const contractAddress = process.env.CONTRACT_ADDRESS; // Dirección del contrato en la blockchain
+const accountAddress = process.env.ACCOUNT_ADDRESS; //Direccion de la cuenta de ganache en la blockchain
+const clavePrivadaGanache = process.env.PRIVATE_KEY_GANACHE;
 
 // Conexión a la red de ganache
 const web3 = new Web3("http://127.0.0.1:7545"); // O la URL de Ethereum
@@ -27,8 +29,7 @@ const contratoFirmas = new web3.eth.Contract(contractABI.abi, contractAddress);
 
 //Se firma el documento
 async function firmarDocumento(hashDocumento, clavePrivada, clavePublica) {
-  // Formateo de la clave privada, publica para poder firmar
-  /*  clavePrivada = "0x" + clavePrivada;*/
+  //Utilizamos esto para almacenar la clave publica en su formato comprimido
   const address = "0x" + web3.utils.keccak256(clavePublica.slice(2)).slice(26);
 
   //Necesitamos quitar el 0x al inicio del hash antes de firmar si no nos dara error a la hora de verificar la firma
@@ -36,74 +37,90 @@ async function firmarDocumento(hashDocumento, clavePrivada, clavePublica) {
   const hashDocumentoFirmar = hashDocumento.startsWith("0x")
     ? hashDocumento.slice(2)
     : hashDocumento;
+
   // Generar el par de claves usando la clave privada
   const keyPair = ec.keyFromPrivate(clavePrivada);
 
   // Obtener la clave pública en formato hexadecimal
-  const clavePublicaGen = keyPair.getPublic("hex");
-  console.log(`Clave pública generada: ${clavePublicaGen}`);
+  let clavePublicaGen = ec.keyFromPublic(clavePublica, "hex").getPublic();
 
   // Firmar el hash del documento con la clave privada
   const firma = keyPair.sign(hashDocumentoFirmar);
 
+  // Convertir r y s a cadenas hexadecimales
+  let rHex = firma.r.toString("hex");
+  let sHex = firma.s.toString("hex");
+
+  // Asegurarse de que r y s tengan 64 caracteres (32 bytes en hexadecimal)
+  // Si no tienen la longitud correcta, añadimos ceros a la izquierda ya que podría generar un numero menor
+  rHex = rHex.padStart(64, "0");
+  sHex = sHex.padStart(64, "0");
+
+  // Construir la firma con r, s y v (recoveryParam)
   const signature = {
-    r: "0x" + firma.r.toString("hex"),
-    s: "0x" + firma.s.toString("hex"),
-    v: firma.recoveryParam + 27, // Si necesitas el v como 27 o 28 para compatibilidad ECDSA
+    r: "0x" + rHex, // Prefijo 0x y r ajustado a 64 caracteres
+    s: "0x" + sHex, // Prefijo 0x y s ajustado a 64 caracteres
+    v: firma.recoveryParam + 27, // El valor de v es 27 o 28 en ECDSA
   };
 
   // Asignar valores r, s y v
   const { r, s, v } = signature;
 
-  console.log("hash del documento original: ",hashDocumento);
-  console.log("hash del documento sin prefijo firmado: ",hashDocumentoFirmar);
-  console.log("Firma: ", signature);
-  console.log("r original: ", firma.r.toString("hex"));
-  console.log("r: ", r);
-  console.log("s: ", s);
-  console.log("s original: ", firma.s.toString("hex"));
-
-  // Firmar el hash del documento usando la clave privada
-  /*   const firma = web3.eth.accounts.sign(hashDocumento, clavePrivada);
-  console.log("Firma actual: ", firma);
-  // Extraer los valores v, r y s de la firma
-  const { v, r, s } = firma; */
-
-  // Llamar a la función del contrato para almacenar la firma
-  const tx = contratoFirmas.methods.almacenarFirmaDocumento(
-    hashDocumento,
-    address,
-    v,
-    r,
-    s
+  // Verificamos la firma antes de almacenarla
+  const firmaValida = ec.verify(
+    hashDocumentoFirmar, // El hash del documento
+    { r: rHex, s: firma.s }, // La firma (r y s como objetos BigNumber)
+    clavePublicaGen // La clave pública del firmante
   );
 
-  // Opciones de transacción
-  const gas = await tx.estimateGas({ from: accountAddress }); // Direccion de la cuenta que administra el contrato
-  const gasPrice = await web3.eth.getGasPrice();
+  // Si la firma es válida, se almacena en el contrato
+  if (firmaValida) {
+    console.log("La firma es válida. Procediendo a almacenar en el contrato.");
 
-  // Crear la transacción firmada
-  const data = tx.encodeABI();
-  const nonce = await web3.eth.getTransactionCount(accountAddress, "latest");
+    // Llamar a la función del contrato para almacenar la firma
+    const tx = contratoFirmas.methods.almacenarFirmaDocumento(
+      hashDocumento,
+      address,
+      v,
+      r,
+      s
+    );
 
-  const signedTx = await web3.eth.accounts.signTransaction(
-    {
-      to: contractAddress,
-      data,
-      gas,
-      gasPrice,
-      nonce,
-    },
-    clavePrivadaGanache
-  );
+    // Opciones de transacción
+    const gas = await tx.estimateGas({ from: accountAddress }); // Direccion de la cuenta que administra el contrato
+    const gasPrice = await web3.eth.getGasPrice();
 
-  // Enviar la transacción
-  const receipt = await web3.eth.sendSignedTransaction(signedTx.rawTransaction);
+    // Crear la transacción firmada
+    const data = tx.encodeABI();
+    const nonce = await web3.eth.getTransactionCount(accountAddress, "latest");
 
-  //Hash de la transaccion para identificar el bloque luego
-  const transactionHash = receipt.transactionHash;
+    const signedTx = await web3.eth.accounts.signTransaction(
+      {
+        to: contractAddress,
+        data,
+        gas,
+        gasPrice,
+        nonce,
+      },
+      clavePrivadaGanache
+    );
 
-  return { receipt, transactionHash };
+    // Enviar la transacción
+    const receipt = await web3.eth.sendSignedTransaction(
+      signedTx.rawTransaction
+    );
+
+    //Hash de la transaccion para identificar el bloque luego
+    const transactionHash = receipt.transactionHash;
+
+    return { receipt, transactionHash };
+  } else {
+    console.log("Firma inválida. No se almacenará en el contrato.");
+    return res.status(404).json({
+      status: "Error",
+      message: "Firma inválida. No se almacenará en el contrato...",
+    });
+  }
 }
 
 // Función para hashear el archivo y devolver el hash en formato bytes32 con el prefijo '0x'
