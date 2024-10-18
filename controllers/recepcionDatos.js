@@ -201,6 +201,30 @@ async function obtenerFirmasDeDocumento(hashDocumento) {
   }
 }
 
+// Función para obtener los documentos firmados por userID
+const obtenerDocumentosFirmadosPorUsuario = async (req, res) => {
+  const { userID } = req.params; // userID enviado desde el frontend en los parámetros de la URL
+
+  try {
+    // Buscar todos los documentos con el userID especificado
+    const documentos = await DocumentModel.find({ userID: userID });
+
+    // Verificar si se encontraron documentos
+    if (documentos.length === 0) {
+      return res.status(404).json({
+        message: "No se encontraron documentos firmados para este usuario.",
+      });
+    }
+
+    // Enviar los documentos encontrados como respuesta
+    res.status(200).json(documentos);
+  } catch (error) {
+    // Manejar errores
+    console.error("Error al obtener documentos firmados:", error);
+    res.status(500).json({ message: "Error al obtener documentos firmados." });
+  }
+};
+
 // Función para verificar la firma con el hash del archivo
 async function verificarFirmaDocumento(req, res) {
   try {
@@ -290,7 +314,7 @@ async function verificarFirmaDocumento(req, res) {
 async function credenciales_documentos_hash(req, res) {
   // Endpoint para recibir el archivo y los datos del formulario
   try {
-    const { privateKey, password, token2FA, userID } = req.body;
+    const { password, token2FA, userID } = req.body;
 
     // Validación del documento
     if (!req.file) {
@@ -355,7 +379,7 @@ async function credenciales_documentos_hash(req, res) {
       user.iv
     );
 
-    // Firma de documento con el contrato inteligente
+    // Firma de documento con el contrato inteligente y lo almacena
     const receipt = await firmarDocumento(
       hashDocumento,
       clavePrivadaDescifrada,
@@ -411,6 +435,7 @@ async function credenciales_documentos_hash(req, res) {
 const recepcionDatos = {
   credenciales_documentos_hash,
   verificarFirmaDocumento,
+  obtenerDocumentosFirmadosPorUsuario,
 };
 
 export default recepcionDatos;

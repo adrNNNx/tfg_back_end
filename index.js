@@ -55,8 +55,7 @@ app.get('/api/auth-cookie', async (req, res) => {
 //Api de los documentos
 app.post('/api/documentos-credenciales', upload.single('file'), recepcionDatos.credenciales_documentos_hash);
 app.post('/api/verificar-firma', upload.single('file'), recepcionDatos.verificarFirmaDocumento);
-
-
+app.get("/api/documentos-firmados/:userID", recepcionDatos.obtenerDocumentosFirmadosPorUsuario);
 
 app.get("/usuarios", async (req, res) => {
   try {

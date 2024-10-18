@@ -112,6 +112,7 @@ async function generarClavePrivadaDesdeSecreto(secreto) {
 
     // Convertir a hexadecimal
     clavePrivadaHex = clavePrivadaDerivada.toString("hex");
+    console.log("clave privada generada: ", clavePrivadaHex);
 
     // Validar la clave privada
     try {
