@@ -5,6 +5,7 @@ import dotenv from "dotenv";
 import argon2 from "argon2";
 import UserModel from "../bdesquemas/userModel.js";
 import DocumentModel from "../bdesquemas/signedDocuments.js";
+import VerificationModel from "../bdesquemas/verificationLogModel.js";
 import { v4 as uuidv4 } from "uuid";
 
 dotenv.config();
@@ -204,18 +205,15 @@ async function obtenerFirmasDeDocumento(hashDocumento) {
 // Función para obtener los documentos firmados por userID
 const obtenerDocumentosFirmadosPorUsuario = async (req, res) => {
   const { userID } = req.params; // userID enviado desde el frontend en los parámetros de la URL
-
   try {
     // Buscar todos los documentos con el userID especificado
     const documentos = await DocumentModel.find({ userID: userID });
-
     // Verificar si se encontraron documentos
     if (documentos.length === 0) {
       return res.status(404).json({
         message: "No se encontraron documentos firmados para este usuario.",
       });
     }
-
     // Enviar los documentos encontrados como respuesta
     res.status(200).json(documentos);
   } catch (error) {
@@ -225,6 +223,83 @@ const obtenerDocumentosFirmadosPorUsuario = async (req, res) => {
   }
 };
 
+// Funcion que se encarga del log de los documentos
+async function registrarVerificacionDocumento(
+  userID,
+  firmanteID,
+  documentID,
+  nombreDocumento
+) {
+  try {
+    // Validar que el usuario que verifica no sea el mismo que firmó
+    if (userID === firmanteID) {
+      console.log(
+        "El usuario que verifica es el mismo que firmó el documento. No se registrará la verificación."
+      );
+      return; // Salir de la función sin registrar
+    }
+
+    const nuevaVerificacion = new VerificationModel({
+      userID: userID,
+      documentID: documentID,
+      nombreDocumento: nombreDocumento,
+      fechaVerificacion: new Date(), // Se guarda automáticamente con la fecha actual
+      firmanteID: firmanteID,
+    });
+
+    await nuevaVerificacion.save();
+    console.log("Verificación de documento registrada en la base de datos.");
+  } catch (error) {
+    console.error("Error al registrar la verificación:", error);
+  }
+}
+// Función para obtener los documentos revisados por un usuario (Log de Documentos)
+async function obtenerDocumentosRevisados(req, res) {
+  const { firmanteID } = req.params; // El userID se pasa como parámetro en la URL
+
+  try {
+    // Buscar todos los logs de verificación del usuario en sesion, en este caso se guarda en firmanteID
+    const logs = await VerificationModel.find({ firmanteID: firmanteID });
+    if (logs.length === 0) {
+      return res.status(404).json({
+        status: "Error",
+        message: "No se encontraron verificaciones para este usuario.",
+      });
+    }
+
+    // Obtener todos los IDs de los usuarios desde los logs
+    const userIDs = logs.map((log) => log.userID); // Obtener solo el userID
+
+    // Obtener los datos de los usuarios correspondientes
+    const usuarios = await UserModel.find({ userID: { $in: userIDs } }); // Busca todos los usuarios que coincidan
+
+    // Convertir la lista de usuarios en un objeto para un acceso más fácil
+    const usuariosMap = {};
+    usuarios.forEach((usuario) => {
+      usuariosMap[usuario.userID] = usuario.nombre; // Asumiendo que tienes un campo 'nombre'
+    });
+
+    // Agregar el nombre del usuario a cada log
+    const logsConNombres = logs.map((log) => ({
+      ...log._doc,
+      nombre: usuariosMap[log.userID] || "Usuario desconocido", // Añadir nombre o valor por defecto
+    }));
+
+    // Enviar los logs como respuesta
+    res.status(200).json({
+      status: "OK",
+      message: "Verificaciones encontradas",
+      documentos: logsConNombres,
+    });
+  } catch (error) {
+    console.error("Error al obtener los documentos revisados:", error);
+    res.status(500).json({
+      status: "Error",
+      message: "Error interno del servidor",
+    });
+  }
+}
+
 // Función para verificar la firma con el hash del archivo
 async function verificarFirmaDocumento(req, res) {
   try {
@@ -232,6 +307,8 @@ async function verificarFirmaDocumento(req, res) {
     if (!req.file) {
       return res.status(400).send("No se ha subido ningún archivo.");
     }
+    // ID del usuario que verifica el documento
+    const userIDverficar = req.body.userID;
 
     // Obtenemos el hash del documento para comparar con el de la base de datos
     const hashDocumento = await hashearArchivo(req.file.buffer); // Usa req.file.buffer para acceder al contenido del archivo
@@ -285,6 +362,14 @@ async function verificarFirmaDocumento(req, res) {
         message: "La firma del documento no es válida.",
       });
     }
+
+    // Registrar el log en la base de datos
+    await registrarVerificacionDocumento(
+      userIDverficar,
+      userID,
+      documentoExistente.documentID,
+      documentoExistente.nombreDocumento
+    );
 
     // Si la firma es válida, enviamos los datos del documento al frontend
     return res.status(200).json({
@@ -436,6 +521,7 @@ const recepcionDatos = {
   credenciales_documentos_hash,
   verificarFirmaDocumento,
   obtenerDocumentosFirmadosPorUsuario,
+  obtenerDocumentosRevisados,
 };
 
 export default recepcionDatos;
