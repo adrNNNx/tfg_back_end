@@ -395,11 +395,18 @@ async function verificarFirmaDocumento(req, res) {
   }
 }
 
+//Funcion para generar el ID del documento y que sea uniforme para la verificacion
+const generateShortDocumentID = async (fileBuffer) => {
+  const hash = crypto.createHash("sha256").update(fileBuffer).digest("hex");
+  // Convierte el hash hexadecimal a base 36 y corta a los primeros 16 caracteres
+  return parseInt(hash, 16).toString(36).slice(0, 16);
+};
+
 //Está funcion se encarga de almacenar los documentos en la blockchain
 async function credenciales_documentos_hash(req, res) {
   // Endpoint para recibir el archivo y los datos del formulario
   try {
-    const { password, token2FA, userID } = req.body;
+    const { password, token2FA, userID, hashOriginal } = req.body;
 
     // Validación del documento
     if (!req.file) {
@@ -443,11 +450,13 @@ async function credenciales_documentos_hash(req, res) {
     // Obtenemos el hash del documento
     const hashDocumento = await hashearArchivo(req.file.buffer); // Usa req.file.buffer para acceder al contenido del archivo
 
-    // Buscar si el hash del documento ya está en la base de datos, para no firmar 2 veces
-    const documentoExistente = await DocumentModel.findOne({
-      hashDocumento,
-    });
-    //Si existe entonces devolvemos un error
+    // Generar el `documentID` a partir del hash del archivo antes de agregarle la marca
+    const documentID = parseInt(hashOriginal, 16).toString(36).slice(0, 16);
+
+    // Buscar si el documento ya existe en la base de datos
+    const documentoExistente = await DocumentModel.findOne({ documentID });
+
+    // Si existe, devolver un error
     if (documentoExistente) {
       return res.status(400).json({
         status: "Error",
@@ -483,9 +492,6 @@ async function credenciales_documentos_hash(req, res) {
 
     // Generar la fecha de la firma
     const fechaFirma = new Date().toISOString();
-
-    // Asignar un ID al documento
-    const documentID = uuidv4();
 
     // Hash de la transacción
     const blockchainTxHash = receipt.transactionHash;
