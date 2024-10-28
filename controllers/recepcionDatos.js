@@ -6,7 +6,6 @@ import argon2 from "argon2";
 import UserModel from "../bdesquemas/userModel.js";
 import DocumentModel from "../bdesquemas/signedDocuments.js";
 import VerificationModel from "../bdesquemas/verificationLogModel.js";
-import { v4 as uuidv4 } from "uuid";
 
 dotenv.config();
 
@@ -21,11 +20,13 @@ import contractABI from "../../contrato_inteligente/abis/ContratoFirma.json" ass
 
 const contractAddress = process.env.CONTRACT_ADDRESS; // Dirección del contrato en la blockchain
 const accountAddress = process.env.ACCOUNT_ADDRESS; //Direccion de la cuenta de ganache en la blockchain
-const clavePrivadaGanache = process.env.PRIVATE_KEY_GANACHE;
+const clavePrivadaMetaMask = process.env.PRIVATE_KEY_ACCOUNT;
 
-// Conexión a la red de ganache
-const web3 = new Web3("http://127.0.0.1:7545"); // O la URL de Ethereum
-// Instancia del contrato
+// Conexión a la red a través de Infura
+const infuraUrl = `https://mainnet.infura.io/v3/${process.env.INFURA_PROJECT_ID}`;
+const web3 = new Web3(new Web3.providers.HttpProvider(infuraUrl));
+
+// Instancia del contrato en la red de Infura
 const contratoFirmas = new web3.eth.Contract(contractABI.abi, contractAddress);
 
 //Se firma el documento
@@ -103,8 +104,9 @@ async function firmarDocumento(hashDocumento, clavePrivada, clavePublica) {
         gasPrice,
         nonce,
       },
-      clavePrivadaGanache
+      clavePrivadaMetaMask
     );
+    console.log("Transaccion firmada: ", signedTx);
 
     // Enviar la transacción
     const receipt = await web3.eth.sendSignedTransaction(
@@ -164,42 +166,6 @@ async function descifrarClavePrivada(
   );
   clavePrivadaDescifrada += decipher.final("utf8");
   return clavePrivadaDescifrada;
-}
-
-// Función para obtener los eventos de firma del documento desde la blockchain
-async function obtenerFirmasDeDocumento(hashDocumento) {
-  try {
-    // Filtrar los eventos de firma usando el hash del documento
-    const eventosFirmas = await contratoFirmas.getPastEvents(
-      "FirmaDocumentoRegistrada",
-      {
-        filter: { hash: hashDocumento }, // Filtrar por el hash del documento
-        fromBlock: 0, // O desde un bloque específico
-        toBlock: "latest",
-      }
-    );
-
-    // Procesar los eventos y extraer las firmas
-    const firmas = eventosFirmas.map((evento) => ({
-      firmante: evento.returnValues.firmante,
-      v: evento.returnValues.v,
-      r: evento.returnValues.r,
-      s: evento.returnValues.s,
-      timestamp: evento.returnValues.timestamp,
-    }));
-
-    return {
-      status: "Success",
-      message: "Firmas recuperadas con éxito.",
-      firmas,
-    };
-  } catch (error) {
-    console.error("Error al recuperar las firmas:", error);
-    return {
-      status: "Error",
-      message: "Ocurrió un error al recuperar las firmas.",
-    };
-  }
 }
 
 // Función para obtener los documentos firmados por userID
@@ -300,6 +266,47 @@ async function obtenerDocumentosRevisados(req, res) {
   }
 }
 
+// Función para obtener los datos de la transacción de ethereum (la firma) y decodificar el input data
+async function obtenerFirmaTransaccion(transactionHash) {
+  try {
+    const transaction = await web3.eth.getTransaction(transactionHash);
+    if (transaction) {
+      console.log("Input Data:", transaction.input);
+
+      // Definir los tipos de los parámetros de la función
+      const paramTypes = ["bytes32", "address", "uint8", "bytes32", "bytes32"];
+
+      // Decodifica el input data
+      const decodedData = web3.eth.abi.decodeParameters(
+        paramTypes,
+        transaction.input.slice(10)
+      ); // Eliminar el primer 0x y los 4 bytes de la firma de la función
+
+      // Asignar los valores a variables individuales
+      const firma = {
+        hash: decodedData[0], // bytes32 hash del documento
+        firmante: decodedData[1], // address firmante
+        v: decodedData[2], // uint8 v
+        r: decodedData[3], // bytes32 r
+        s: decodedData[4], // bytes32 s
+        timestamp: Date.now() / 1000, // Puedes asignar un timestamp si es necesario
+      };
+
+      return {
+        status: "Success",
+        message: "Firma recuperada con éxito.",
+        firma,
+      };
+    } else {
+      console.log("No se encontró la transacción.");
+      return null;
+    }
+  } catch (error) {
+    console.error("Error al obtener los datos de la transacción:", error);
+    return null;
+  }
+}
+
 // Función para verificar la firma con el hash del archivo
 async function verificarFirmaDocumento(req, res) {
   try {
@@ -323,16 +330,23 @@ async function verificarFirmaDocumento(req, res) {
         message: "El documento ingresado no ha sido firmado aún.",
       });
     }
-
+    const hashTransaccion = documentoExistente.blockchainTxHash; //Con esto podemos traer los datos de la blockchain directamente
     const userID = documentoExistente.userID;
     const user = await UserModel.findOne({ userID });
 
-    // Obtenemos las firmas almacenadas en la blockchain
-    const firmaUsuario = await obtenerFirmasDeDocumento(hashDocumento);
-    console.log("Firmas recuperadas de la blockchain: ", firmaUsuario);
+    const firmaTransaccion = await obtenerFirmaTransaccion(hashTransaccion);
+    console.log("Firmas recuperadas por datos transaccion: ", firmaTransaccion);
+
+    // Verificamos que la transacción haya sido exitosa al recuperar los datos de la firma
+    if (firmaTransaccion.status !== "Success") {
+      return res.status(400).json({
+        status: "Error",
+        message: "No se pudo recuperar la firma de la blockchain.",
+      });
+    }
 
     // Recuperamos los datos de la firma del blockchain
-    const { v, r, s } = firmaUsuario.firmas[0];
+    const { v, r, s, timestamp } = firmaTransaccion.firma;
 
     // 1. Convertimos los valores de `r` y `s` a su formato hexadecimal
     const rHex = r.slice(2); // Quita '0x'
@@ -394,13 +408,6 @@ async function verificarFirmaDocumento(req, res) {
     });
   }
 }
-
-//Funcion para generar el ID del documento y que sea uniforme para la verificacion
-const generateShortDocumentID = async (fileBuffer) => {
-  const hash = crypto.createHash("sha256").update(fileBuffer).digest("hex");
-  // Convierte el hash hexadecimal a base 36 y corta a los primeros 16 caracteres
-  return parseInt(hash, 16).toString(36).slice(0, 16);
-};
 
 //Está funcion se encarga de almacenar los documentos en la blockchain
 async function credenciales_documentos_hash(req, res) {
