@@ -414,6 +414,9 @@ async function credenciales_documentos_hash(req, res) {
   // Endpoint para recibir el archivo y los datos del formulario
   try {
     const { password, token2FA, userID, hashOriginal } = req.body;
+    //Esto lo usamos para buscar si ya existe un hash asociado al documento en la BD, por si el usuario
+    //Vuelve a subir un documento con la marca de la firma
+    const hashOriginalBD = "0x" + hashOriginal;
 
     // Validación del documento
     if (!req.file) {
@@ -460,9 +463,11 @@ async function credenciales_documentos_hash(req, res) {
     // Generar el `documentID` a partir del hash del archivo antes de agregarle la marca
     const documentID = parseInt(hashOriginal, 16).toString(36).slice(0, 16);
 
-    // Buscar si el documento ya existe en la base de datos
-    const documentoExistente = await DocumentModel.findOne({ documentID });
-
+    // Buscar si el documento ya existe en la base de datos, si encuentra 1 de esos 2 quiere decir que ya se firmo (por documentID o hashDocumento)
+    //Si encuentra el documentID es el archivo original y si encuentra por el hash es el archivo con la marca de la firma
+    const documentoExistente = await DocumentModel.findOne({
+      $or: [{ documentID }, { hashDocumento: hashOriginalBD }],
+    });
     // Si existe, devolver un error
     if (documentoExistente) {
       return res.status(400).json({

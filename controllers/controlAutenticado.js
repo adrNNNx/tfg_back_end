@@ -185,6 +185,8 @@ async function generarClavePublica(clavePrivadaHex) {
 async function register(req, res) {
   console.log(req.body);
   const user = req.body.nom_usu;
+  const nombreReal = req.body.nombreReal;
+  const apellido = req.body.apellido;
   const password = req.body.contr_usu;
   const secreto = req.body.secreto;
 
@@ -199,7 +201,7 @@ async function register(req, res) {
     if (usuarioArevisar) {
       return res
         .status(400)
-        .json({ status: "Error", message: "Este usuario ya existe" });
+        .json({ status: "Error", message: "Este nombre de usuario ya existe" });
     }
 
     // Generar el hash de la contraseña
@@ -231,6 +233,8 @@ async function register(req, res) {
       },
       userTempData: {
         user,
+        nombreReal,
+        apellido,
         hashPassword,
         clavePrivadaCifrada,
         clavePublica,
@@ -262,6 +266,8 @@ async function verify2FA(req, res) {
         userID: uuidv4(),
         nombre: userTempData.user,
         contraseña: userTempData.hashPassword,
+        nombreReal: userTempData.nombreReal,
+        apellido: userTempData.apellido,
         clavePrivadaCifrada: userTempData.clavePrivadaCifrada,
         clavePublica: userTempData.clavePublica,
         saltClavePrivada: userTempData.saltClavePrivada,
