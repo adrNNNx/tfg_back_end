@@ -17,9 +17,12 @@ const ec = new EC("secp256k1"); // Ethereum utiliza la curva secp256k1
 //Web3 para conectar con el contrato
 import Web3 from "web3";
 //import contractABI from "../../contrato_inteligente/abis/ContratoFirma.json" assert { type: "json" }; // ABI del contrato compilado
-const contractABI = await import("../../contrato_inteligente/abis/ContratoFirma.json", {
-  assert: { type: "json" }
-}).then((module) => module.default);
+const contractABI = await import(
+  "../blockchain/abis/FirmaContrato.json",
+  {
+    assert: { type: "json" },
+  }
+).then((module) => module.default);
 
 const contractAddress = process.env.CONTRACT_ADDRESS; // Dirección del contrato en la blockchain
 const accountAddress = process.env.ACCOUNT_ADDRESS; //Direccion de la cuenta de ganache en la blockchain
