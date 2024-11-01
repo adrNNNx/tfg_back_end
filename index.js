@@ -32,6 +32,7 @@ app.use(
   cors({
     origin: [
       "http://localhost:3000",
+      "https://tfg-front-end.vercel.app"
     ],
     credentials: true, // Agregar si es necesario
     methods: "GET,HEAD,PUT,PATCH,POST,DELETE", // Métodos permitidos
