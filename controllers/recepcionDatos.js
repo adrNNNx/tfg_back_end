@@ -6,6 +6,7 @@ import argon2 from "argon2";
 import UserModel from "../bdesquemas/userModel.js";
 import DocumentModel from "../bdesquemas/signedDocuments.js";
 import VerificationModel from "../bdesquemas/verificationLogModel.js";
+import { promises as fs } from "fs";
 
 dotenv.config();
 
@@ -17,12 +18,11 @@ const ec = new EC("secp256k1"); // Ethereum utiliza la curva secp256k1
 //Web3 para conectar con el contrato
 import Web3 from "web3";
 //import contractABI from "../../contrato_inteligente/abis/ContratoFirma.json" assert { type: "json" }; // ABI del contrato compilado
-const contractABI = await import(
+const jsonPath = new URL(
   "../blockchain/abis/FirmaContrato.json",
-  {
-    assert: { type: "json" },
-  }
-).then((module) => module.default);
+  import.meta.url
+);
+const contractABI = JSON.parse(await fs.readFile(jsonPath, "utf8"));
 
 const contractAddress = process.env.CONTRACT_ADDRESS; // Dirección del contrato en la blockchain
 const accountAddress = process.env.ACCOUNT_ADDRESS; //Direccion de la cuenta de ganache en la blockchain
